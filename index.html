@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Multi-Tool</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+    <h2>PDF Multi-Tool</h2>
+    
+    <div id="drop-zone">
+        <strong>Choose PDF files</strong><br>
+        or drag and drop them here
+    </div>
+    <input type="file" id="pdf-input" accept=".pdf" multiple style="display: none;">
+
+    <button id="sort-btn" style="display: none; background-color: #6c757d; color: white; margin-bottom: 10px; width: 100%;">Sort Files A-Z</button>
+
+    <div id="preview-container" style="display: none;"></div>
+
+    <div class="btn-group">
+        <button id="merge-btn">Merge All</button>
+        <button id="split-btn">Split File</button>
+    </div>
+
+    <button id="clear-btn">Clear Files</button>
+
+    <progress id="progress-bar" value="0" max="100"></progress>
+    <div id="status">No files selected</div>
+</div>
+
+<script>
+    const pdfWorker = new Worker('worker.js');
+    const { PDFDocument } = PDFLib;
+
+    const fileInput = document.getElementById('pdf-input');
+    const statusText = document.getElementById('status');
+    const prog = document.getElementById('progress-bar');
+    const mergeBtn = document.getElementById('merge-btn');
+    const splitBtn = document.getElementById('split-btn');
+    const clearBtn = document.getElementById('clear-btn');
+    const sortBtn = document.getElementById('sort-btn'); // Added
+    const dropZone = document.getElementById('drop-zone');
+    const previewContainer = document.getElementById('preview-container');
+
+    let selectedFiles = [];
+
+    async function updateUI() {
+        previewContainer.innerHTML = "";
+        
+        if (selectedFiles.length === 0) {
+            statusText.innerText = "No files selected";
+            statusText.style.color = "#5f6368";
+            previewContainer.style.display = "none";
+            sortBtn.style.display = "none"; // Hide sort button when empty
+            return;
+        }
+
+        statusText.innerText = `✅ ${selectedFiles.length} file(s) ready to merge or split`;
+        statusText.style.color = "#1a73e8";
+        previewContainer.style.display = "flex";
+        sortBtn.style.display = "block"; // Show sort button when files exist
+
+        selectedFiles.forEach((file, index) => {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const item = document.createElement('div');
+                item.className = 'preview-item';
+                
+                const blob = new Blob([e.target.result], { type: 'application/pdf' });
+                const url = URL.createObjectURL(blob) + "#page=1&toolbar=0&navpanes=0&scrollbar=0";
+                
+                item.innerHTML = `
+                    <button class="delete-btn" onclick="removeFile(${index})">×</button>
+                    <embed src="${url}" type="application/pdf">
+                    <div title="${file.name}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${file.name}</div>
+                `;
+                previewContainer.appendChild(item);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+    }
+
+    // NEW: Sorting Function
+    sortBtn.onclick = () => {
+        selectedFiles.sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true, sensitivity: 'base'}));
+        updateUI();
+    };
+
+    window.removeFile = function(index) {
+        selectedFiles.splice(index, 1);
+        updateUI();
+    };
+
+    fileInput.onchange = () => {
+        selectedFiles = [...selectedFiles, ...Array.from(fileInput.files)];
+        updateUI();
+    };
+
+    clearBtn.onclick = () => {
+        selectedFiles = [];
+        fileInput.value = ""; 
+        updateUI();
+        prog.style.display = 'none';
+    };
+
+    dropZone.onclick = () => fileInput.click();
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('hover'); };
+    dropZone.ondragleave = () => dropZone.classList.remove('hover');
+    dropZone.ondrop = (e) => { 
+        e.preventDefault(); 
+        dropZone.classList.remove('hover');
+        selectedFiles = [...selectedFiles, ...Array.from(e.dataTransfer.files)];
+        updateUI(); 
+    };
+
+    async function startProcess(action) {
+        if (selectedFiles.length === 0) return alert("Select files first!");
+        
+        mergeBtn.disabled = true;
+        splitBtn.disabled = true;
+        prog.style.display = 'block';
+        prog.value = 0;
+
+        const filesData = [];
+        for (let file of selectedFiles) {
+            filesData.push(await file.arrayBuffer());
+        }
+
+        pdfWorker.postMessage({ action, filesData }, filesData);
+    }
+
+    mergeBtn.onclick = () => startProcess('merge');
+    splitBtn.onclick = () => startProcess('split');
+
+    pdfWorker.onmessage = function(e) {
+        const { type, value, data, filename } = e.data;
+        if (type === 'progress') {
+            prog.value = value;
+            statusText.innerText = `Processing... ${Math.round(value)}%`;
+        } else if (type === 'done' || type === 'page') {
+            downloadFile(data, filename || "result.pdf");
+            if (type === 'done') {
+                statusText.innerText = "Process Complete!";
+                mergeBtn.disabled = false;
+                splitBtn.disabled = false;
+                prog.style.display = 'none';
+            }
+        }
+    };
+
+    function downloadFile(data, filename) {
+        const blob = new Blob([data], { type: 'application/pdf' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+    }
+</script>
+</body>
+</html>
